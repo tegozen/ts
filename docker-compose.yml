@@ -15,17 +15,11 @@ services:
       TS3SERVER_LICENSE: ${TS3SERVER_LICENSE}  # Принятие лицензионного соглашения
 
   ts3manager:
-    image: php:apache
-    container_name: ${TS3MANAGER_CONTAINER_NAME}  # Имя контейнера для TS3 Manager из .env
-    restart: always
+    image: "joni1802/ts3-manager"
+    container_name: ${TS3MANAGER_CONTAINER_NAME}  # Имя контейнера для TeamSpeak из .env
     ports:
-      - "${TS3MANAGER_PORT}:80"  # Локальный порт для веб-админки TS3 Manager из .env
-    volumes:
-      - ./ts3manager:/var/www/html  # Файлы веб-интерфейса TS3 Manager
+      - "${TS3MANAGER_PORT}:8080:
     depends_on:
       - ${TS3_CONTAINER_NAME}
     environment:
-      TS3_SERVER: ${TS3_CONTAINER_NAME}                # Имя или IP TeamSpeak сервера из .env
-      TS3_SERVER_PORT: ${TS3_SERVER_PORT}      # Порт ServerQuery из .env
-      TS3_SERVER_ADMIN_USER: ${TS3_SERVER_ADMIN_USER}  # Пользователь ServerQuery из .env
-      TS3_SERVER_ADMIN_PASSWORD: ${TS3_SERVER_ADMIN_PASSWORD}  # Пароль ServerQuery из .env
+      - WHITELIST=${TS3MANAGER_WHITELIST}

@@ -1,0 +1,7 @@
+# Env's
+.env*
+!.env.example
+
+# Volumes
+ts3manager
+teamspeak-data

@@ -13,11 +13,3 @@ services:
       - ./teamspeak-data:/var/ts3server
     environment:
       TS3SERVER_LICENSE: ${TS3SERVER_LICENSE}  # Принятие лицензионного соглашения
-
-  ts3manager:
-    image: "joni1802/ts3-manager"
-    container_name: ${TS3MANAGER_CONTAINER_NAME}  # Имя контейнера для TeamSpeak из .env
-    ports:
-      - "${TS3MANAGER_PORT}:8080"
-    environment:
-      - WHITELIST=${TS3MANAGER_WHITELIST}

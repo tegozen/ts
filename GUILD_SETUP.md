@@ -17,7 +17,7 @@
 [Гостевая]       needed_join=10   ← только Гость (и все выше)
 Лобби            needed_join=50   ← Рядовой+
 Общий            needed_join=50
-1 на 1           needed_join=50, maxclients=2
+1 на 1           needed_join=50 (через channel perm), maxclients=2
 Рейд / Ивенты    needed_join=50
 AFK              needed_join=50
 Офицерская       needed_join=70   ← только Офицер / Server Admin
@@ -30,6 +30,18 @@ AFK              needed_join=50
 | **Гость** | только `[Гостевая]` |
 | **Рядовой** | все, **кроме** Офицерской; в «1 на 1» — пока есть свободный слот (макс. 2) |
 | **Офицер** / Admin | везде, в том числе в полный «1 на 1» (`b_channel_join_ignore_maxclients`) |
+
+Нужная сила входа на канале — это **право канала** `i_channel_needed_join_power` (Права → Каналы), не поле в «Редактировать канал». Сидер ставит его через `channeladdperm` и проверяет `channelpermlist`.
+
+Иконки групп (текст рядом с ником выключен — `i_group_show_name_in_tree=0`):
+
+| Группа | Файл | Вид |
+|--------|------|-----|
+| Гость | [`icons/guest.png`](icons/guest.png) | серый силуэт |
+| Рядовой | [`icons/member.png`](icons/member.png) | синий шеврон |
+| Офицер | [`icons/officer.png`](icons/officer.png) | золотая звезда |
+
+Сидер заливает PNG через FileTransfer; `i_icon_id` = CRC32 файла.
 
 ## Подготовка
 

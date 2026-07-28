@@ -8,6 +8,8 @@ import os
 import socket
 import sys
 import time
+import zlib
+from pathlib import Path
 from typing import Any
 
 
@@ -48,6 +50,8 @@ PERMS_GUEST = {
     "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
     "b_channel_join_ignore_maxclients": 0,
+    # 0 = не показывать имя группы справа от ника; i_icon_id ставится после upload иконок
+    "i_group_show_name_in_tree": 0,
 }
 
 # Member: common channels
@@ -69,6 +73,7 @@ PERMS_MEMBER = {
     "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
     "b_channel_join_ignore_maxclients": 0,
+    "i_group_show_name_in_tree": 0,
 }
 
 # Officer: join everywhere, assign Рядовой/Офицер, move, channel-kick
@@ -91,6 +96,7 @@ PERMS_OFFICER = {
     "i_client_ban_max_bantime": 0,
     # Can enter full channels (e.g. "1 на 1" with max 2)
     "b_channel_join_ignore_maxclients": 1,
+    "i_group_show_name_in_tree": 0,
 }
 
 # Ensure admin cannot be assigned by officers (needed > officer power 75)
@@ -303,6 +309,50 @@ class ServerQuery:
         self.command("use", sid=sid)
         print(f"Selected virtual server sid={sid}")
 
+    def upload_icon(self, png_path: Path, ft_counter: list[int]) -> int:
+        """Upload PNG via FileTransfer; return TeamSpeak icon id (signed CRC32)."""
+        data = png_path.read_bytes()
+        crc = zlib.crc32(data) & 0xFFFFFFFF
+        icon_id = crc - 0x100000000 if crc > 0x7FFFFFFF else crc
+        if self.dry_run:
+            print(f"[dry-run] upload icon {png_path.name} -> i_icon_id={icon_id}")
+            return icon_id
+
+        ft_counter[0] += 1
+        clientftfid = ft_counter[0]
+        # TS stores icons as /icon_<unsigned_crc>
+        remote = f"/icon_{crc}"
+        try:
+            info = self.command(
+                "ftinitupload",
+                clientftfid=clientftfid,
+                name=remote,
+                size=len(data),
+                overwrite=1,
+                channelid=0,
+                cpw="",
+            )
+        except QueryError as exc:
+            # 1101 / already exists — still use CRC id
+            if "exists" in str(exc).lower() or exc.error_id in (1101, 1281):
+                print(f"Icon {png_path.name} already on server, id={icon_id}")
+                return icon_id
+            raise
+
+        row = info[0] if info else {}
+        ftkey = row.get("ftkey")
+        port = int(row.get("port", "30033"))
+        if not ftkey:
+            raise QueryError(f"ftinitupload returned no ftkey for {png_path.name}")
+
+        with socket.create_connection((self.host, port), timeout=self.timeout) as ft_sock:
+            ft_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            ft_sock.sendall(ftkey.encode("utf-8"))
+            ft_sock.sendall(data)
+
+        print(f"Uploaded icon {png_path.name} -> i_icon_id={icon_id} (crc={crc})")
+        return icon_id
+
 
 def find_group(groups: list[dict[str, str]], *names: str) -> dict[str, str] | None:
     wanted = {n.lower() for n in names}
@@ -345,19 +395,22 @@ def ensure_named_group(
     return sgid
 
 
-def load_permission_names(q: ServerQuery) -> set[str]:
-    """Live permission names from this TS instance (IDs differ by version; names are stable)."""
+def load_permissions(q: ServerQuery) -> tuple[set[str], dict[str, int]]:
+    """Live permission names + IDs from this TS instance."""
     rows = q.command("permissionlist")
-    # ServerQuery returns permname=... (not permsid=) in permissionlist.
-    names = set()
+    names: set[str] = set()
+    ids: dict[str, int] = {}
     for r in rows:
         name = r.get("permname") or r.get("permsid")
-        if name:
-            names.add(name)
+        if not name:
+            continue
+        names.add(name)
+        if r.get("permid"):
+            ids[name] = int(r["permid"])
     if q.dry_run and not names:
         names = set(PERMS_GUEST) | set(PERMS_MEMBER) | set(PERMS_OFFICER) | set(PERMS_ADMIN_GUARD)
-    print(f"Loaded {len(names)} permissions from permissionlist")
-    return names
+    print(f"Loaded {len(names)} permissions from permissionlist ({len(ids)} with IDs)")
+    return names, ids
 
 
 def set_group_perms(
@@ -397,31 +450,60 @@ def find_channel(channels: list[dict[str, str]], name: str) -> dict[str, str] | 
     return None
 
 
-def ensure_channels(q: ServerQuery) -> dict[str, int]:
+def ensure_channels(q: ServerQuery, perm_ids: dict[str, int]) -> dict[str, int]:
     listed = q.command("channellist", "-flags")
     by_name: dict[str, int] = {}
     if q.dry_run:
         listed = []
 
+    join_perm = "i_channel_needed_join_power"
+    join_permid = perm_ids.get(join_perm)
+
     def set_join_power(cid: int, needed: int) -> None:
-        """Set needed join power via channel property, fallback to channel perm."""
+        """Set needed join power via channeladdperm (channeledit property is ignored by TS)."""
+        q.command("channeledit", cid=cid, channel_flag_permanent=1)
+        # Replace any previous value
         try:
-            q.command(
-                "channeledit",
-                cid=cid,
-                channel_flag_permanent=1,
-                channel_needed_join_power=needed,
-            )
+            if join_permid is not None:
+                q.command("channeldelperm", cid=cid, permid=join_permid)
+            else:
+                q.command("channeldelperm", cid=cid, permsid=join_perm)
         except QueryError:
-            q.command("channeledit", cid=cid, channel_flag_permanent=1)
-            q.command(
-                "channeladdperm",
-                cid=cid,
-                permsid="i_channel_needed_join_power",
-                permvalue=needed,
-                permnegated=0,
-                permskip=0,
+            pass
+
+        add_kwargs: dict[str, Any] = {
+            "cid": cid,
+            "permvalue": needed,
+            "permnegated": 0,
+            "permskip": 0,
+        }
+        if join_permid is not None:
+            add_kwargs["permid"] = join_permid
+        else:
+            add_kwargs["permsid"] = join_perm
+        q.command("channeladdperm", **add_kwargs)
+
+        # Verify
+        listed_perms = q.command("channelpermlist", "-permsid", cid=cid)
+        found = None
+        for row in listed_perms:
+            if row.get("permsid") == join_perm or (
+                join_permid is not None and row.get("permid") == str(join_permid)
+            ):
+                found = row.get("permvalue")
+                break
+        if found is None:
+            # Retry without -permsid (numeric ids only)
+            listed_perms = q.command("channelpermlist", cid=cid)
+            for row in listed_perms:
+                if join_permid is not None and row.get("permid") == str(join_permid):
+                    found = row.get("permvalue")
+                    break
+        if found != str(needed):
+            raise QueryError(
+                f"Failed to set {join_perm}={needed} on cid={cid} (got {found!r})"
             )
+        print(f"Channel cid={cid} {join_perm}={found} OK")
 
     def set_max_clients(cid: int, maxclients: int | None) -> None:
         if maxclients is None:
@@ -493,7 +575,7 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
 
 
 def seed(q: ServerQuery) -> None:
-    known_perms = load_permission_names(q)
+    known_perms, perm_ids = load_permissions(q)
 
     groups = q.command("servergrouplist")
     if q.dry_run and not groups:
@@ -532,9 +614,42 @@ def seed(q: ServerQuery) -> None:
     admin = find_group(regular, *GROUP_ADMIN_ALIASES)
     admin_sgid = int(admin["sgid"]) if admin else None
 
-    set_group_perms(q, guest_sgid, PERMS_GUEST, known_perms)
-    set_group_perms(q, member_sgid, PERMS_MEMBER, known_perms)
-    set_group_perms(q, officer_sgid, PERMS_OFFICER, known_perms)
+    # Custom icons: repo icons/ on host, /icons in seeder container
+    icons_dir = next(
+        (
+            p
+            for p in (
+                Path(__file__).resolve().parent.parent / "icons",
+                Path("/icons"),
+                Path(__file__).resolve().parent / "icons",
+            )
+            if p.is_dir()
+        ),
+        None,
+    )
+    if icons_dir is None:
+        raise QueryError("Icons directory not found (expected ./icons next to compose)")
+    ft_counter = [0]
+    icon_files = {
+        GROUP_GUEST: icons_dir / "guest.png",
+        GROUP_MEMBER: icons_dir / "member.png",
+        GROUP_OFFICER: icons_dir / "officer.png",
+    }
+    for label, path in icon_files.items():
+        if not path.is_file():
+            raise QueryError(f"Missing icon file: {path}")
+
+    guest_icon = q.upload_icon(icon_files[GROUP_GUEST], ft_counter)
+    member_icon = q.upload_icon(icon_files[GROUP_MEMBER], ft_counter)
+    officer_icon = q.upload_icon(icon_files[GROUP_OFFICER], ft_counter)
+
+    perms_guest = {**PERMS_GUEST, "i_icon_id": guest_icon}
+    perms_member = {**PERMS_MEMBER, "i_icon_id": member_icon}
+    perms_officer = {**PERMS_OFFICER, "i_icon_id": officer_icon}
+
+    set_group_perms(q, guest_sgid, perms_guest, known_perms)
+    set_group_perms(q, member_sgid, perms_member, known_perms)
+    set_group_perms(q, officer_sgid, perms_officer, known_perms)
     if admin_sgid is not None:
         set_group_perms(q, admin_sgid, PERMS_ADMIN_GUARD, known_perms)
         print(f"Guarded Server Admin group (sgid={admin_sgid}) against officer assign")
@@ -543,7 +658,7 @@ def seed(q: ServerQuery) -> None:
     q.command("serveredit", virtualserver_default_server_group=guest_sgid)
     print(f"Default server group set to {GROUP_GUEST!r} (sgid={guest_sgid})")
 
-    channels = ensure_channels(q)
+    channels = ensure_channels(q, perm_ids)
     guest_cid = channels.get(CHANNEL_GUEST)
     if guest_cid is not None and guest_cid >= 0:
         # Default channel is controlled by channel_flag_default (set in ensure_channels).

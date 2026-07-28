@@ -323,18 +323,20 @@ class ServerQuery:
         # TS stores icons as /icon_<unsigned_crc>
         remote = f"/icon_{crc}"
         try:
+            # Param is cid (not channelid). cpw= and resume= are required by ServerQuery.
             info = self.command(
                 "ftinitupload",
                 clientftfid=clientftfid,
                 name=remote,
+                cid=0,
+                cpw="",
                 size=len(data),
                 overwrite=1,
-                channelid=0,
-                cpw="",
+                resume=0,
             )
         except QueryError as exc:
-            # 1101 / already exists — still use CRC id
-            if "exists" in str(exc).lower() or exc.error_id in (1101, 1281):
+            # already exists — still use CRC id
+            if "exists" in str(exc).lower() or exc.error_id in (1101, 1281, 1282):
                 print(f"Icon {png_path.name} already on server, id={icon_id}")
                 return icon_id
             raise

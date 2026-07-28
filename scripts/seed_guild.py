@@ -194,13 +194,21 @@ class ServerQuery:
 
     def _read_line(self) -> str:
         assert self._sock is not None
-        while b"\n" not in self._buf:
+        while True:
+            # TS3 ServerQuery often terminates lines with LFCR (\n\r).
+            # A leftover \r otherwise prefixes the next line as "\rerror ..." and breaks parsing.
+            self._buf = (
+                self._buf.replace(b"\r\n", b"\n")
+                .replace(b"\n\r", b"\n")
+                .replace(b"\r", b"\n")
+            )
+            if b"\n" in self._buf:
+                line, self._buf = self._buf.split(b"\n", 1)
+                return line.decode("utf-8", errors="replace")
             chunk = self._sock.recv(4096)
             if not chunk:
                 raise QueryError("ServerQuery connection closed")
             self._buf += chunk
-        line, self._buf = self._buf.split(b"\n", 1)
-        return line.decode("utf-8", errors="replace").rstrip("\r")
 
     def command(self, cmd: str, *options: str, **params: Any) -> list[dict[str, str]]:
         parts = [cmd, *options]
@@ -237,7 +245,6 @@ class ServerQuery:
 
         assert self._sock is not None
         shown = label or line.split(" ", 1)[0]
-        # ServerQuery line terminator is LF only.
         payload = (line + "\n").encode("utf-8")
         print(f"→ {line if shown != 'login' else shown + ' ***'}")
         self._sock.sendall(payload)
@@ -245,7 +252,9 @@ class ServerQuery:
         body_lines: list[str] = []
         try:
             while True:
-                raw = self._read_line()
+                raw = self._read_line().strip()
+                if not raw:
+                    continue
                 if raw.startswith("error "):
                     err = parse_records(raw[len("error ") :])
                     info = err[0] if err else {}
@@ -258,15 +267,12 @@ class ServerQuery:
                         )
                     body = " ".join(body_lines)
                     return parse_records(body)
-                if raw:
-                    body_lines.append(raw)
+                body_lines.append(raw)
         except (TimeoutError, socket.timeout) as exc:
             stuck = self._peek_unread()
             raise QueryError(
                 f"timed out waiting for response to {shown!r}. "
-                f"unread_bytes={stuck!r}. "
-                "Usually Query flood-limit / missing IP in query_ip_allowlist.txt — "
-                "recreate teamspeak after updating allowlist.",
+                f"unread_bytes={stuck!r}.",
             ) from exc
 
     def login(self, user: str, password: str) -> None:

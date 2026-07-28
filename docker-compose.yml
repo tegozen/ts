@@ -16,7 +16,7 @@ services:
       TS3SERVER_LICENSEPATH: ${TS3SERVER_LICENSEPATH:-/var/ts3server}
       TS3SERVER_QUERY_PROTOCOLS: raw
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 10011 || exit 1"]
+      test: ["CMD-SHELL", "nc -z localhost 30033 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -153,13 +153,13 @@ class ServerQuery:
         for attempt in range(1, 31):
             try:
                 sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self._sock = sock
                 self._buf = b""
                 sock.settimeout(self.timeout)
                 banner = self._read_line()
                 if "TS3" not in banner:
                     raise QueryError(f"Unexpected ServerQuery banner: {banner!r}")
-                # Drain MOTD / any extra greeting lines until the server goes quiet.
                 self._drain_greeting()
                 print(f"Connected to ServerQuery at {self.host}:{self.port}")
                 return
@@ -180,7 +180,7 @@ class ServerQuery:
                 line = self._read_line()
                 if line:
                     print(f"Query greeting: {line[:120]}")
-        except TimeoutError:
+        except (TimeoutError, socket.timeout):
             pass
         finally:
             self._sock.settimeout(self.timeout)
@@ -218,8 +218,9 @@ class ServerQuery:
 
         assert self._sock is not None
         shown = label or line.split(" ", 1)[0]
-        # CR-LF is accepted by ServerQuery and avoids rare telnet-style stalls on \n-only.
-        self._sock.sendall((line + "\r\n").encode("utf-8"))
+        # ServerQuery line terminator is LF only. CRLF breaks/hangs login on TS3.
+        payload = (line + "\n").encode("utf-8")
+        self._sock.sendall(payload)
 
         body_lines: list[str] = []
         try:
@@ -239,16 +240,19 @@ class ServerQuery:
                     return parse_records(body)
                 if raw:
                     body_lines.append(raw)
-        except TimeoutError as exc:
+        except (TimeoutError, socket.timeout) as exc:
             raise QueryError(
                 f"timed out waiting for response to {shown!r}. "
                 "Check TS3_QUERY_PASSWORD (from first-boot logs) and that Query is not flood-limited.",
             ) from exc
 
     def login(self, user: str, password: str) -> None:
-        # Prefer positional login — widely compatible with TS3 ServerQuery.
         print(f"Authenticating as {user}...")
-        self._send(f"login {escape(user)} {escape(password)}", label="login")
+        self.command(
+            "login",
+            client_login_name=user,
+            client_login_password=password,
+        )
         print(f"Logged in as {user}")
 
     def use(self, sid: int = 1) -> None:
@@ -455,6 +459,8 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    print(f"Using Query {args.user}@{args.host}:{args.port} (password length={len(password)})")
 
     q = ServerQuery(args.host, args.port, dry_run=args.dry_run)
     try:

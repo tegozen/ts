@@ -36,9 +36,8 @@ PERMS_GUEST = {
     "i_group_member_remove_power": 0,
     "i_group_needed_member_add_power": 10,
     "i_group_needed_member_remove_power": 10,
-    "b_client_move": 0,
-    "b_client_kick_from_channel": 0,
-    "b_client_kick_from_server": 0,
+    "i_client_kick_from_channel_power": 0,
+    "i_client_kick_from_server_power": 0,
     "i_client_ban_max_bantime": 0,
     "i_client_talk_power": 10,
 }
@@ -52,14 +51,14 @@ PERMS_MEMBER = {
     "i_group_member_remove_power": 0,
     "i_group_needed_member_add_power": 40,
     "i_group_needed_member_remove_power": 40,
-    "b_client_move": 0,
-    "b_client_kick_from_channel": 0,
-    "b_client_kick_from_server": 0,
+    "i_client_kick_from_channel_power": 0,
+    "i_client_kick_from_server_power": 0,
     "i_client_ban_max_bantime": 0,
     "i_client_talk_power": 50,
 }
 
 # Officer: all channels + assign member/officer + move
+# Move = i_client_move_power (there is no b_client_move in TS3).
 PERMS_OFFICER = {
     "i_channel_join_power": 70,
     "i_client_move_power": 60,
@@ -68,9 +67,8 @@ PERMS_OFFICER = {
     "i_group_member_remove_power": 75,
     "i_group_needed_member_add_power": 70,
     "i_group_needed_member_remove_power": 70,
-    "b_client_move": 1,
-    "b_client_kick_from_channel": 1,
-    "b_client_kick_from_server": 0,
+    "i_client_kick_from_channel_power": 50,
+    "i_client_kick_from_server_power": 0,
     "i_client_ban_max_bantime": 0,
     "i_client_talk_power": 70,
 }
@@ -328,17 +326,25 @@ def ensure_named_group(
 
 
 def set_group_perms(q: ServerQuery, sgid: int, perms: dict[str, int]) -> None:
-    # One permission per command — pipe-batches often return error 2562 (invalid permission ID).
+    # One permission per command. Skip unknown IDs so a bad name cannot block channels.
+    applied = 0
     for name, value in perms.items():
-        q.command(
-            "servergroupaddperm",
-            sgid=sgid,
-            permsid=name,
-            permvalue=value,
-            permnegated=0,
-            permskip=0,
-        )
-    print(f"Applied {len(perms)} permissions to sgid={sgid}")
+        try:
+            q.command(
+                "servergroupaddperm",
+                sgid=sgid,
+                permsid=name,
+                permvalue=value,
+                permnegated=0,
+                permskip=0,
+            )
+            applied += 1
+        except QueryError as exc:
+            if exc.error_id == 2562:
+                print(f"WARN: skip unknown perm {name!r} on sgid={sgid}")
+                continue
+            raise
+    print(f"Applied {applied}/{len(perms)} permissions to sgid={sgid}")
 
 
 def find_channel(channels: list[dict[str, str]], name: str) -> dict[str, str] | None:

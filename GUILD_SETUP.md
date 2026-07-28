@@ -74,7 +74,7 @@ python scripts/seed_guild.py --dry-run
    docker compose up -d --force-recreate
    docker compose --profile tools run --rm seeder
    ```
-3. Порт Query должен быть только на localhost (`127.0.0.1:10011`). Файл [`query_ip_allowlist.txt`](query_ip_allowlist.txt) снимает flood-limit для localhost и docker-сетей.
+3. Порт Query должен быть только на localhost (`127.0.0.1:10011`). Сидер ходит на Query через `127.0.0.1` (тот же network namespace, что у TS). При необходимости скопируйте [`query_ip_allowlist.txt`](query_ip_allowlist.txt) в `teamspeak-data/` (не монтируйте его `:ro` — entrypoint TS делает `chown` и упадёт).
 
 ## Чеклист проверки
 

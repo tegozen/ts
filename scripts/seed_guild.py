@@ -39,7 +39,7 @@ PERMS_GUEST = {
     "b_client_move": 0,
     "b_client_kick_from_channel": 0,
     "b_client_kick_from_server": 0,
-    "b_client_ban_create": 0,
+    "i_client_ban_max_bantime": 0,
     "i_client_talk_power": 10,
 }
 
@@ -55,7 +55,7 @@ PERMS_MEMBER = {
     "b_client_move": 0,
     "b_client_kick_from_channel": 0,
     "b_client_kick_from_server": 0,
-    "b_client_ban_create": 0,
+    "i_client_ban_max_bantime": 0,
     "i_client_talk_power": 50,
 }
 
@@ -71,7 +71,7 @@ PERMS_OFFICER = {
     "b_client_move": 1,
     "b_client_kick_from_channel": 1,
     "b_client_kick_from_server": 0,
-    "b_client_ban_create": 0,
+    "i_client_ban_max_bantime": 0,
     "i_client_talk_power": 70,
 }
 
@@ -328,16 +328,16 @@ def ensure_named_group(
 
 
 def set_group_perms(q: ServerQuery, sgid: int, perms: dict[str, int]) -> None:
-    chunks: list[str] = []
+    # One permission per command — pipe-batches often return error 2562 (invalid permission ID).
     for name, value in perms.items():
-        chunks.append(
-            f"permsid={escape(name)} permvalue={escape(value)} permnegated=0 permskip=0"
+        q.command(
+            "servergroupaddperm",
+            sgid=sgid,
+            permsid=name,
+            permvalue=value,
+            permnegated=0,
+            permskip=0,
         )
-    batch_size = 8
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i : i + batch_size]
-        line = f"servergroupaddperm sgid={sgid} " + "|".join(batch)
-        q._send(line, label="servergroupaddperm")
     print(f"Applied {len(perms)} permissions to sgid={sgid}")
 
 
@@ -353,6 +353,26 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
     by_name: dict[str, int] = {}
     if q.dry_run:
         listed = []
+
+    def set_join_power(cid: int, needed: int) -> None:
+        """Set needed join power via channel property, fallback to channel perm."""
+        try:
+            q.command(
+                "channeledit",
+                cid=cid,
+                channel_flag_permanent=1,
+                channel_needed_join_power=needed,
+            )
+        except QueryError:
+            q.command("channeledit", cid=cid, channel_flag_permanent=1)
+            q.command(
+                "channeladdperm",
+                cid=cid,
+                permsid="i_channel_needed_join_power",
+                permvalue=needed,
+                permnegated=0,
+                permskip=0,
+            )
 
     for name, needed, is_default in CHANNELS:
         existing = find_channel(listed, name)
@@ -376,7 +396,6 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
                 channel_name=name,
                 channel_flag_permanent=1,
                 channel_flag_default=1,
-                channel_needed_join_power=needed,
             )
             print(f"Renamed default channel -> {name!r} (cid={cid})")
             default["channel_name"] = name
@@ -384,7 +403,6 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
             params: dict[str, Any] = {
                 "channel_name": name,
                 "channel_flag_permanent": 1,
-                "channel_needed_join_power": needed,
             }
             if is_default:
                 params["channel_flag_default"] = 1
@@ -396,15 +414,10 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
             print(f"Created channel {name!r} (cid={cid})")
             listed.append({"cid": str(cid), "channel_name": name})
 
-        edit: dict[str, Any] = {
-            "cid": cid,
-            "channel_flag_permanent": 1,
-            "channel_needed_join_power": needed,
-        }
-        if is_default:
-            edit["channel_flag_default"] = 1
         if cid >= 0:
-            q.command("channeledit", **edit)
+            if is_default:
+                q.command("channeledit", cid=cid, channel_flag_default=1)
+            set_join_power(cid, needed)
         by_name[name] = cid
 
     return by_name

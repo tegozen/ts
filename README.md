@@ -3,6 +3,7 @@
 Запуск сервера TeamSpeak 3 через Docker Compose. Все данные хранятся в каталоге `teamspeak-data` — его можно копировать на другой сервер для переноса.
 
 Схема гильдии (каналы, группы Гость/Рядовой/Офицер, сидер): см. **[GUILD_SETUP.md](GUILD_SETUP.md)**.
+Справочник пермишенов TS3: **[docs/TS3_PERMISSIONS.md](docs/TS3_PERMISSIONS.md)**.
 
 ## Требования
 

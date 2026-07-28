@@ -28,8 +28,10 @@ CHANNELS = [
 ]
 
 # Guest: only guest channel
+# Names from ReSpeak/tsdeclarations Permissions.csv (no b_client_move — use i_client_move_power).
 PERMS_GUEST = {
     "i_channel_join_power": 10,
+    "i_client_talk_power": 10,
     "i_client_move_power": 0,
     "i_client_needed_move_power": 0,
     "i_group_member_add_power": 0,
@@ -37,14 +39,19 @@ PERMS_GUEST = {
     "i_group_needed_member_add_power": 10,
     "i_group_needed_member_remove_power": 10,
     "i_client_kick_from_channel_power": 0,
+    "i_client_needed_kick_from_channel_power": 25,
     "i_client_kick_from_server_power": 0,
+    "i_client_needed_kick_from_server_power": 100,
+    "i_client_ban_power": 0,
+    "i_client_needed_ban_power": 100,
+    "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
-    "i_client_talk_power": 10,
 }
 
 # Member: common channels
 PERMS_MEMBER = {
     "i_channel_join_power": 50,
+    "i_client_talk_power": 50,
     "i_client_move_power": 0,
     "i_client_needed_move_power": 30,
     "i_group_member_add_power": 0,
@@ -52,15 +59,19 @@ PERMS_MEMBER = {
     "i_group_needed_member_add_power": 40,
     "i_group_needed_member_remove_power": 40,
     "i_client_kick_from_channel_power": 0,
+    "i_client_needed_kick_from_channel_power": 30,
     "i_client_kick_from_server_power": 0,
+    "i_client_needed_kick_from_server_power": 100,
+    "i_client_ban_power": 0,
+    "i_client_needed_ban_power": 100,
+    "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
-    "i_client_talk_power": 50,
 }
 
-# Officer: all channels + assign member/officer + move
-# Move = i_client_move_power (there is no b_client_move in TS3).
+# Officer: join everywhere, assign Рядовой/Офицер, move, channel-kick
 PERMS_OFFICER = {
     "i_channel_join_power": 70,
+    "i_client_talk_power": 70,
     "i_client_move_power": 60,
     "i_client_needed_move_power": 50,
     "i_group_member_add_power": 75,
@@ -68,9 +79,13 @@ PERMS_OFFICER = {
     "i_group_needed_member_add_power": 70,
     "i_group_needed_member_remove_power": 70,
     "i_client_kick_from_channel_power": 50,
+    "i_client_needed_kick_from_channel_power": 50,
     "i_client_kick_from_server_power": 0,
+    "i_client_needed_kick_from_server_power": 100,
+    "i_client_ban_power": 0,
+    "i_client_needed_ban_power": 100,
+    "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
-    "i_client_talk_power": 70,
 }
 
 # Ensure admin cannot be assigned by officers (needed > officer power 75)
@@ -325,10 +340,29 @@ def ensure_named_group(
     return sgid
 
 
-def set_group_perms(q: ServerQuery, sgid: int, perms: dict[str, int]) -> None:
-    # One permission per command. Skip unknown IDs so a bad name cannot block channels.
+def load_permission_names(q: ServerQuery) -> set[str]:
+    """Live permission names from this TS instance (IDs differ by version; names are stable)."""
+    rows = q.command("permissionlist")
+    names = {r["permsid"] for r in rows if r.get("permsid")}
+    if q.dry_run and not names:
+        # Enough for dry-run filtering
+        names = set(PERMS_GUEST) | set(PERMS_MEMBER) | set(PERMS_OFFICER) | set(PERMS_ADMIN_GUARD)
+    print(f"Loaded {len(names)} permissions from permissionlist")
+    return names
+
+
+def set_group_perms(
+    q: ServerQuery,
+    sgid: int,
+    perms: dict[str, int],
+    known: set[str],
+) -> None:
+    # One permission per command. Only apply names that exist on this server.
     applied = 0
     for name, value in perms.items():
+        if known and name not in known:
+            print(f"WARN: skip unknown perm {name!r} on sgid={sgid} (not in permissionlist)")
+            continue
         try:
             q.command(
                 "servergroupaddperm",
@@ -341,7 +375,7 @@ def set_group_perms(q: ServerQuery, sgid: int, perms: dict[str, int]) -> None:
             applied += 1
         except QueryError as exc:
             if exc.error_id == 2562:
-                print(f"WARN: skip unknown perm {name!r} on sgid={sgid}")
+                print(f"WARN: skip invalid perm {name!r} on sgid={sgid}")
                 continue
             raise
     print(f"Applied {applied}/{len(perms)} permissions to sgid={sgid}")
@@ -430,6 +464,8 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
 
 
 def seed(q: ServerQuery) -> None:
+    known_perms = load_permission_names(q)
+
     groups = q.command("servergrouplist")
     if q.dry_run and not groups:
         # Synthetic defaults for dry-run messaging
@@ -467,11 +503,11 @@ def seed(q: ServerQuery) -> None:
     admin = find_group(regular, *GROUP_ADMIN_ALIASES)
     admin_sgid = int(admin["sgid"]) if admin else None
 
-    set_group_perms(q, guest_sgid, PERMS_GUEST)
-    set_group_perms(q, member_sgid, PERMS_MEMBER)
-    set_group_perms(q, officer_sgid, PERMS_OFFICER)
+    set_group_perms(q, guest_sgid, PERMS_GUEST, known_perms)
+    set_group_perms(q, member_sgid, PERMS_MEMBER, known_perms)
+    set_group_perms(q, officer_sgid, PERMS_OFFICER, known_perms)
     if admin_sgid is not None:
-        set_group_perms(q, admin_sgid, PERMS_ADMIN_GUARD)
+        set_group_perms(q, admin_sgid, PERMS_ADMIN_GUARD, known_perms)
         print(f"Guarded Server Admin group (sgid={admin_sgid}) against officer assign")
 
     # Default group for new clients = Guest

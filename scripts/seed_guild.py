@@ -343,9 +343,13 @@ def ensure_named_group(
 def load_permission_names(q: ServerQuery) -> set[str]:
     """Live permission names from this TS instance (IDs differ by version; names are stable)."""
     rows = q.command("permissionlist")
-    names = {r["permsid"] for r in rows if r.get("permsid")}
+    # ServerQuery returns permname=... (not permsid=) in permissionlist.
+    names = set()
+    for r in rows:
+        name = r.get("permname") or r.get("permsid")
+        if name:
+            names.add(name)
     if q.dry_run and not names:
-        # Enough for dry-run filtering
         names = set(PERMS_GUEST) | set(PERMS_MEMBER) | set(PERMS_OFFICER) | set(PERMS_ADMIN_GUARD)
     print(f"Loaded {len(names)} permissions from permissionlist")
     return names
@@ -510,15 +514,15 @@ def seed(q: ServerQuery) -> None:
         set_group_perms(q, admin_sgid, PERMS_ADMIN_GUARD, known_perms)
         print(f"Guarded Server Admin group (sgid={admin_sgid}) against officer assign")
 
-    # Default group for new clients = Guest
-    q.command("servermodify", virtualserver_default_server_group=guest_sgid)
+    # Default group for new clients = Guest (command is serveredit, not servermodify)
+    q.command("serveredit", virtualserver_default_server_group=guest_sgid)
     print(f"Default server group set to {GROUP_GUEST!r} (sgid={guest_sgid})")
 
     channels = ensure_channels(q)
     guest_cid = channels.get(CHANNEL_GUEST)
     if guest_cid is not None and guest_cid >= 0:
-        q.command("servermodify", virtualserver_default_channel_id=guest_cid)
-        print(f"Default channel set to {CHANNEL_GUEST!r} (cid={guest_cid})")
+        # Default channel is controlled by channel_flag_default (set in ensure_channels).
+        print(f"Default channel is {CHANNEL_GUEST!r} (cid={guest_cid})")
 
     print("Guild seed completed successfully.")
 

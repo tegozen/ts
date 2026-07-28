@@ -211,6 +211,25 @@ class ServerQuery:
         line = " ".join(parts)
         return self._send(line, label=cmd)
 
+    def _peek_unread(self) -> bytes:
+        assert self._sock is not None
+        leftover = bytes(self._buf)
+        try:
+            self._sock.settimeout(0.0)
+            while True:
+                try:
+                    chunk = self._sock.recv(4096)
+                except BlockingIOError:
+                    break
+                if not chunk:
+                    break
+                leftover += chunk
+        except (TimeoutError, socket.timeout, OSError):
+            pass
+        finally:
+            self._sock.settimeout(self.timeout)
+        return leftover
+
     def _send(self, line: str, label: str | None = None) -> list[dict[str, str]]:
         if self.dry_run:
             print(f"[dry-run] {line}")
@@ -218,8 +237,9 @@ class ServerQuery:
 
         assert self._sock is not None
         shown = label or line.split(" ", 1)[0]
-        # ServerQuery line terminator is LF only. CRLF breaks/hangs login on TS3.
+        # ServerQuery line terminator is LF only.
         payload = (line + "\n").encode("utf-8")
+        print(f"→ {line if shown != 'login' else shown + ' ***'}")
         self._sock.sendall(payload)
 
         body_lines: list[str] = []
@@ -241,18 +261,18 @@ class ServerQuery:
                 if raw:
                     body_lines.append(raw)
         except (TimeoutError, socket.timeout) as exc:
+            stuck = self._peek_unread()
             raise QueryError(
                 f"timed out waiting for response to {shown!r}. "
-                "Check TS3_QUERY_PASSWORD (from first-boot logs) and that Query is not flood-limited.",
+                f"unread_bytes={stuck!r}. "
+                "Usually Query flood-limit / missing IP in query_ip_allowlist.txt — "
+                "recreate teamspeak after updating allowlist.",
             ) from exc
 
     def login(self, user: str, password: str) -> None:
         print(f"Authenticating as {user}...")
-        self.command(
-            "login",
-            client_login_name=user,
-            client_login_password=password,
-        )
+        # Positional form is the most compatible with classic ServerQuery.
+        self._send(f"login {escape(user)} {escape(password)}", label="login")
         print(f"Logged in as {user}")
 
     def use(self, sid: int = 1) -> None:

@@ -1,6 +1,5 @@
 # IPs exempt from ServerQuery flood protection.
-# Keep 127.0.0.1 for local/seeder (network_mode: service:teamspeak).
-# Docker bridge ranges cover compose services connecting by hostname.
+# Without this, Query may accept TCP + banner but never answer commands.
 127.0.0.1
 ::1
 10.0.0.0/8

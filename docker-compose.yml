@@ -6,11 +6,20 @@ services:
     ports:
       - "${TS3_PORT_UDP}:9987/udp"
       - "${TS3_PORT_FILE}:30033"
-      # ServerQuery raw — только localhost, не публикуйте наружу
+      # ServerQuery raw — только localhost на хосте, не публикуйте наружу
       - "127.0.0.1:${TS3_PORT_QUERY:-10011}:10011"
-    # Полное состояние сервера (БД, логи, licensekey.dat) — копируйте teamspeak-data на другой хост для переноса
     volumes:
       - ./teamspeak-data:/var/ts3server
+      # Копируется в volume entrypoint'ом (не монтировать поверх файла — chown сломается)
+      - ./query_ip_allowlist.txt:/allowlist/query_ip_allowlist.txt:ro
+    # Сначала allowlist в data, потом штатный entrypoint (нужен для chown)
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cp /allowlist/query_ip_allowlist.txt /var/ts3server/query_ip_allowlist.txt
+        rm -f /var/ts3server/query_ip_blacklist.txt
+        touch /var/ts3server/query_ip_blacklist.txt
+        exec entrypoint.sh ts3server
     environment:
       TS3SERVER_LICENSE: ${TS3SERVER_LICENSE}
       TS3SERVER_LICENSEPATH: ${TS3SERVER_LICENSEPATH:-/var/ts3server}
@@ -33,7 +42,6 @@ services:
   seeder:
     image: python:3.12-alpine
     profiles: ["tools"]
-    network_mode: "service:teamspeak"
     depends_on:
       teamspeak:
         condition: service_healthy
@@ -41,7 +49,8 @@ services:
       - ./scripts:/scripts:ro
     working_dir: /scripts
     environment:
-      TS3_QUERY_HOST: "127.0.0.1"
+      # Через docker-сеть, не через network_mode/loopback
+      TS3_QUERY_HOST: teamspeak
       TS3_QUERY_PORT: "10011"
       TS3_QUERY_USER: ${TS3_QUERY_USER:-serveradmin}
       TS3_QUERY_PASSWORD: ${TS3_QUERY_PASSWORD}

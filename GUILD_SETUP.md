@@ -66,15 +66,17 @@ python scripts/seed_guild.py --dry-run
 
 Для «чистой» схемы с нуля удалите volume (`teamspeak-data`) и поднимите сервер заново — сидер не делает полный reset уже замусоренной БД.
 
-## Если сидер пишет `timed out`
+## Если сидер пишет `timed out` на login
 
-1. Убедитесь, что `TS3_QUERY_PASSWORD` в `.env` совпадает с `password=` из логов **первого** старта (не privilege key / token).
-2. Пересоздайте контейнер после обновления allowlist:
+Query принял TCP и показал Welcome, но **не отвечает на команды** — почти всегда flood-limit (IP сидера нет в allowlist).
+
+1. В `.env`: `TS3_QUERY_PASSWORD=` пароль из логов (`password= "..."`, не token).
+2. На сервере пересоздайте TS (подтянется allowlist + сброс blacklist):
    ```bash
    docker compose up -d --force-recreate
    docker compose --profile tools run --rm seeder
    ```
-3. Порт Query должен быть только на localhost (`127.0.0.1:10011`). Сидер ходит на Query через `127.0.0.1` (тот же network namespace, что у TS). При необходимости скопируйте [`query_ip_allowlist.txt`](query_ip_allowlist.txt) в `teamspeak-data/` (не монтируйте его `:ro` — entrypoint TS делает `chown` и упадёт).
+3. В логе сидера должно быть `Using Query serveradmin@teamspeak:10011`. Если всё ещё `127.0.0.1` — на сервере старый compose без обновления.
 
 ## Чеклист проверки
 

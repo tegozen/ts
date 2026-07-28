@@ -11,6 +11,8 @@ services:
     # Полное состояние сервера (БД, логи, licensekey.dat) — копируйте teamspeak-data на другой хост для переноса
     volumes:
       - ./teamspeak-data:/var/ts3server
+      # Flood-exempt Query clients (localhost + docker networks)
+      - ./query_ip_allowlist.txt:/var/ts3server/query_ip_allowlist.txt:ro
     environment:
       TS3SERVER_LICENSE: ${TS3SERVER_LICENSE}
       TS3SERVER_LICENSEPATH: ${TS3SERVER_LICENSEPATH:-/var/ts3server}

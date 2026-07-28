@@ -137,7 +137,7 @@ def parse_records(body: str) -> list[dict[str, str]]:
 
 
 class ServerQuery:
-    def __init__(self, host: str, port: int, timeout: float = 10.0, dry_run: bool = False) -> None:
+    def __init__(self, host: str, port: int, timeout: float = 30.0, dry_run: bool = False) -> None:
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -153,25 +153,37 @@ class ServerQuery:
         for attempt in range(1, 31):
             try:
                 sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-                sock.settimeout(self.timeout)
                 self._sock = sock
                 self._buf = b""
+                sock.settimeout(self.timeout)
                 banner = self._read_line()
                 if "TS3" not in banner:
                     raise QueryError(f"Unexpected ServerQuery banner: {banner!r}")
-                # greeting line after banner
-                try:
-                    self._read_line()
-                except Exception:
-                    pass
+                # Drain MOTD / any extra greeting lines until the server goes quiet.
+                self._drain_greeting()
                 print(f"Connected to ServerQuery at {self.host}:{self.port}")
                 return
-            except OSError as exc:
+            except (OSError, QueryError) as exc:
                 last_err = exc
+                self.close()
                 time.sleep(1)
                 if attempt % 5 == 0:
                     print(f"Waiting for ServerQuery... ({attempt}/30)")
         raise QueryError(f"Cannot connect to ServerQuery at {self.host}:{self.port}: {last_err}")
+
+    def _drain_greeting(self) -> None:
+        """Read leftover welcome lines without blocking the first real command."""
+        assert self._sock is not None
+        self._sock.settimeout(1.0)
+        try:
+            while True:
+                line = self._read_line()
+                if line:
+                    print(f"Query greeting: {line[:120]}")
+        except TimeoutError:
+            pass
+        finally:
+            self._sock.settimeout(self.timeout)
 
     def close(self) -> None:
         if self._sock is not None:
@@ -205,26 +217,38 @@ class ServerQuery:
             return []
 
         assert self._sock is not None
-        self._sock.sendall((line + "\n").encode("utf-8"))
+        shown = label or line.split(" ", 1)[0]
+        # CR-LF is accepted by ServerQuery and avoids rare telnet-style stalls on \n-only.
+        self._sock.sendall((line + "\r\n").encode("utf-8"))
 
         body_lines: list[str] = []
-        while True:
-            raw = self._read_line()
-            if raw.startswith("error "):
-                err = parse_records(raw[len("error ") :])
-                info = err[0] if err else {}
-                error_id = int(info.get("id", "-1"))
-                msg = info.get("msg", "unknown")
-                if error_id != 0:
-                    shown = label or line.split(" ", 1)[0]
-                    raise QueryError(f"{shown} failed: id={error_id} msg={msg} ({line})", error_id)
-                body = " ".join(body_lines)
-                return parse_records(body)
-            if raw:
-                body_lines.append(raw)
+        try:
+            while True:
+                raw = self._read_line()
+                if raw.startswith("error "):
+                    err = parse_records(raw[len("error ") :])
+                    info = err[0] if err else {}
+                    error_id = int(info.get("id", "-1"))
+                    msg = info.get("msg", "unknown")
+                    if error_id != 0:
+                        raise QueryError(
+                            f"{shown} failed: id={error_id} msg={msg} ({line})",
+                            error_id,
+                        )
+                    body = " ".join(body_lines)
+                    return parse_records(body)
+                if raw:
+                    body_lines.append(raw)
+        except TimeoutError as exc:
+            raise QueryError(
+                f"timed out waiting for response to {shown!r}. "
+                "Check TS3_QUERY_PASSWORD (from first-boot logs) and that Query is not flood-limited.",
+            ) from exc
 
     def login(self, user: str, password: str) -> None:
-        self.command("login", client_login_name=user, client_login_password=password)
+        # Prefer positional login — widely compatible with TS3 ServerQuery.
+        print(f"Authenticating as {user}...")
+        self._send(f"login {escape(user)} {escape(password)}", label="login")
         print(f"Logged in as {user}")
 
     def use(self, sid: int = 1) -> None:
@@ -423,7 +447,7 @@ def main() -> int:
     parser.add_argument("--password", default=os.getenv("TS3_QUERY_PASSWORD", ""))
     args = parser.parse_args()
 
-    password = args.password
+    password = (args.password or "").strip().strip('"').strip("'")
     if not password and not args.dry_run:
         print(
             "TS3_QUERY_PASSWORD is empty. Set it in .env from first-boot logs "
@@ -444,6 +468,12 @@ def main() -> int:
         return 0
     except QueryError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except TimeoutError as exc:
+        print(
+            f"ERROR: timed out ({exc}). Check TS3_QUERY_PASSWORD and ServerQuery allowlist.",
+            file=sys.stderr,
+        )
         return 2
     except OSError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

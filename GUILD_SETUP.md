@@ -66,6 +66,16 @@ python scripts/seed_guild.py --dry-run
 
 Для «чистой» схемы с нуля удалите volume (`teamspeak-data`) и поднимите сервер заново — сидер не делает полный reset уже замусоренной БД.
 
+## Если сидер пишет `timed out`
+
+1. Убедитесь, что `TS3_QUERY_PASSWORD` в `.env` совпадает с `password=` из логов **первого** старта (не privilege key / token).
+2. Пересоздайте контейнер после обновления allowlist:
+   ```bash
+   docker compose up -d --force-recreate
+   docker compose --profile tools run --rm seeder
+   ```
+3. Порт Query должен быть только на localhost (`127.0.0.1:10011`). Файл [`query_ip_allowlist.txt`](query_ip_allowlist.txt) снимает flood-limit для localhost и docker-сетей.
+
 ## Чеклист проверки
 
 Подключите три клиента (или смените группы одному):

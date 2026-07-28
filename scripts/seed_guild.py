@@ -17,14 +17,15 @@ GROUP_OFFICER = "Офицер"
 GROUP_ADMIN_ALIASES = ("Server Admin", "Админ", "Admin")
 
 CHANNEL_GUEST = "[Гостевая]"
+# name, needed_join_power, is_default, maxclients (None = unlimited)
 CHANNELS = [
-    # name, needed_join_power, is_default
-    (CHANNEL_GUEST, 10, True),
-    ("Лобби", 50, False),
-    ("Общий", 50, False),
-    ("Рейд / Ивенты", 50, False),
-    ("AFK", 50, False),
-    ("Офицерская", 70, False),
+    (CHANNEL_GUEST, 10, True, None),
+    ("Лобби", 50, False, None),
+    ("Общий", 50, False, None),
+    ("1 на 1", 50, False, 2),
+    ("Рейд / Ивенты", 50, False, None),
+    ("AFK", 50, False, None),
+    ("Офицерская", 70, False, None),
 ]
 
 # Guest: only guest channel
@@ -46,6 +47,7 @@ PERMS_GUEST = {
     "i_client_needed_ban_power": 100,
     "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
+    "b_channel_join_ignore_maxclients": 0,
 }
 
 # Member: common channels
@@ -66,6 +68,7 @@ PERMS_MEMBER = {
     "i_client_needed_ban_power": 100,
     "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
+    "b_channel_join_ignore_maxclients": 0,
 }
 
 # Officer: join everywhere, assign Рядовой/Офицер, move, channel-kick
@@ -86,6 +89,8 @@ PERMS_OFFICER = {
     "i_client_needed_ban_power": 100,
     "b_client_ban_create": 0,
     "i_client_ban_max_bantime": 0,
+    # Can enter full channels (e.g. "1 на 1" with max 2)
+    "b_channel_join_ignore_maxclients": 1,
 }
 
 # Ensure admin cannot be assigned by officers (needed > officer power 75)
@@ -418,7 +423,23 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
                 permskip=0,
             )
 
-    for name, needed, is_default in CHANNELS:
+    def set_max_clients(cid: int, maxclients: int | None) -> None:
+        if maxclients is None:
+            q.command(
+                "channeledit",
+                cid=cid,
+                channel_flag_maxclients_unlimited=1,
+            )
+            return
+        q.command(
+            "channeledit",
+            cid=cid,
+            channel_flag_maxclients_unlimited=0,
+            channel_maxclients=maxclients,
+        )
+        print(f"Channel cid={cid} maxclients={maxclients}")
+
+    for name, needed, is_default, maxclients in CHANNELS:
         existing = find_channel(listed, name)
         if existing:
             cid = int(existing["cid"])
@@ -450,6 +471,9 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
             }
             if is_default:
                 params["channel_flag_default"] = 1
+            if maxclients is not None:
+                params["channel_flag_maxclients_unlimited"] = 0
+                params["channel_maxclients"] = maxclients
             result = q.command("channelcreate", **params)
             if q.dry_run:
                 cid = -1
@@ -462,6 +486,7 @@ def ensure_channels(q: ServerQuery) -> dict[str, int]:
             if is_default:
                 q.command("channeledit", cid=cid, channel_flag_default=1)
             set_join_power(cid, needed)
+            set_max_clients(cid, maxclients)
         by_name[name] = cid
 
     return by_name
